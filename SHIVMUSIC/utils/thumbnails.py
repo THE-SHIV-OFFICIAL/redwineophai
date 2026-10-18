@@ -156,7 +156,7 @@ def build_thumb(bg, avatar_img, title, channel, views, duration, seed):
     # VIBE at top left with intense neon glow
     glow_text(canvas, (110, 60), "VIBE", f_vibe, GOLD_LIGHT, (*ROSE_NEON, 255), radius=18, strength=4)
     # RED WINE at top right
-    glow_text(canvas, (1810, 70), "RED WINE", f_brand, CREAM, (*ROSE_NEON, 240), radius=16, strength=4, anchor="ra")
+    glow_text(canvas, (1810, 70), "🍷RED WINE", f_brand, CREAM, (*ROSE_NEON, 240), radius=16, strength=4, anchor="ra")
 
     # 4. Left: Tilted YouTube Cover Card with Neon Glow Frame
     cw, ch = 470, 370
