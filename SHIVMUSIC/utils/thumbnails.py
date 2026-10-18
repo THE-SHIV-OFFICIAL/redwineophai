@@ -10,12 +10,15 @@ from SHIVMUSIC import app
 
 W, H = 1920, 1080
 
-# Red Wine palette (inspired by the reference but intentionally different)
-WINE = (196, 30, 72)
-ROSE = (255, 92, 130)
-GOLD = (255, 196, 92)
-CREAM = (255, 238, 225)
-MUTED = (214, 186, 192)
+# Luxury Red Wine & Royal Gold palette
+WINE_BG = (12, 2, 7)
+WINE_DARK = (40, 4, 16)
+WINE_RICH = (155, 14, 48)
+ROSE_NEON = (255, 45, 100)
+GOLD_LIGHT = (255, 225, 135)
+GOLD_WARM = (245, 175, 55)
+CREAM = (255, 248, 244)
+MUTED = (215, 185, 195)
 
 
 def _font(path, size):
@@ -25,8 +28,7 @@ def _font(path, size):
         return ImageFont.load_default()
 
 
-def glow_text(base, pos, text, font, fill, glow, radius=10, strength=3, anchor="la"):
-    """Draw text with a soft neon glow."""
+def glow_text(base, pos, text, font, fill, glow, radius=12, strength=3, anchor="la"):
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     d.text(pos, text, font=font, fill=glow, anchor=anchor)
@@ -36,13 +38,50 @@ def glow_text(base, pos, text, font, fill, glow, radius=10, strength=3, anchor="
     ImageDraw.Draw(base).text(pos, text, font=font, fill=fill, anchor=anchor)
 
 
-def glow_shape(base, draw_fn, color, radius=18, strength=2):
-    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    draw_fn(ImageDraw.Draw(layer), color)
-    blurred = layer.filter(ImageFilter.GaussianBlur(radius))
-    for _ in range(strength):
-        base.alpha_composite(blurred)
-    base.alpha_composite(layer)
+def draw_lens_flare(draw_layer, cx, cy, size=24, color=GOLD_LIGHT):
+    r, g, b = color[:3]
+    draw_layer.ellipse((cx - size // 3, cy - size // 3, cx + size // 3, cy + size // 3), fill=(255, 255, 255, 255))
+    draw_layer.ellipse((cx - size, cy - size, cx + size, cy + size), fill=(r, g, b, 70))
+    draw_layer.line((cx - size * 4, cy, cx + size * 4, cy), fill=(255, 255, 255, 210), width=2)
+    draw_layer.line((cx - size * 7, cy, cx + size * 7, cy), fill=(r, g, b, 110), width=1)
+    draw_layer.line((cx, cy - size * 3, cx, cy + size * 3), fill=(255, 255, 255, 190), width=2)
+    draw_layer.line((cx, cy - size * 5, cx, cy + size * 5), fill=(r, g, b, 100), width=1)
+    dsz = int(size * 1.6)
+    draw_layer.line((cx - dsz, cy - dsz, cx + dsz, cy + dsz), fill=(r, g, b, 120), width=1)
+    draw_layer.line((cx - dsz, cy + dsz, cx + dsz, cy - dsz), fill=(r, g, b, 120), width=1)
+
+
+def draw_flowing_ribbon(canvas, p0, p1, p2, p3, base_width=40, color_start=ROSE_NEON, color_end=GOLD_LIGHT, steps=120):
+    pts = []
+    for i in range(steps + 1):
+        t = i / steps
+        u = 1 - t
+        x = (u**3) * p0[0] + 3 * (u**2) * t * p1[0] + 3 * u * (t**2) * p2[0] + (t**3) * p3[0]
+        y = (u**3) * p0[1] + 3 * (u**2) * t * p1[1] + 3 * u * (t**2) * p2[1] + (t**3) * p3[1]
+        pts.append((x, y))
+
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    for i in range(len(pts) - 1):
+        t = i / len(pts)
+        r = int(color_start[0] + (color_end[0] - color_start[0]) * t)
+        g = int(color_start[1] + (color_end[1] - color_start[1]) * t)
+        b = int(color_start[2] + (color_end[2] - color_start[2]) * t)
+        w = max(4, int(base_width * math.sin(math.pi * (0.04 + 0.92 * t))))
+        alpha = int((120 + 80 * math.sin(math.pi * t)))
+        ld.line([pts[i], pts[i + 1]], fill=(r, g, b, alpha), width=w)
+
+    spine = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(spine)
+    for i in range(len(pts) - 1):
+        t = i / len(pts)
+        sd.line([pts[i], pts[i + 1]], fill=(255, 255, 255, int(190 * math.sin(math.pi * t))), width=3)
+
+    canvas.alpha_composite(layer.filter(ImageFilter.GaussianBlur(30)))
+    canvas.alpha_composite(layer.filter(ImageFilter.GaussianBlur(12)))
+    canvas.alpha_composite(layer)
+    canvas.alpha_composite(spine.filter(ImageFilter.GaussianBlur(5)))
+    canvas.alpha_composite(spine)
 
 
 async def download_user_photo(user_id):
@@ -55,146 +94,276 @@ async def download_user_photo(user_id):
 
 
 def build_thumb(bg, avatar_img, title, channel, views, duration, seed):
-    # --- Background: blurred cover + wine tint + vignette ---
+    # 1. Base Canvas with Deep Rich Wine & Ambient Vignette
     canvas = ImageOps.fit(bg.convert("RGB"), (W, H)).convert("RGBA")
-    canvas = canvas.filter(ImageFilter.GaussianBlur(22))
-    canvas.alpha_composite(Image.new("RGBA", (W, H), (22, 4, 12, 150)))
+    canvas = canvas.filter(ImageFilter.GaussianBlur(34))
+
+    tint = Image.new("RGBA", (W, H), (*WINE_BG, 185))
+    canvas.alpha_composite(tint)
+
     vign = Image.new("L", (W, H), 0)
-    ImageDraw.Draw(vign).ellipse((-300, -250, W + 300, H + 250), fill=255)
+    ImageDraw.Draw(vign).ellipse((-160, -160, W + 160, H + 160), fill=255)
     vign = vign.filter(ImageFilter.GaussianBlur(160))
-    dark = Image.new("RGBA", (W, H), (8, 0, 4, 235))
-    dark.putalpha(Image.eval(vign, lambda v: 255 - v))
-    canvas.alpha_composite(dark)
-    # soft wine light leaks
-    leak = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(leak)
-    ld.ellipse((-200, 650, 700, 1300), fill=(*WINE, 90))
-    ld.ellipse((1300, -250, 2200, 450), fill=(*GOLD, 45))
-    canvas.alpha_composite(leak.filter(ImageFilter.GaussianBlur(140)))
+    vign_layer = Image.new("RGBA", (W, H), (3, 0, 2, 230))
+    vign_layer.putalpha(Image.eval(vign, lambda v: 255 - v))
+    canvas.alpha_composite(vign_layer)
 
-    f_brand = _font("SHIVMUSIC/assets/font.ttf", 64)
-    f_vibe = _font("SHIVMUSIC/assets/font.ttf", 92)
-    f_title = _font("SHIVMUSIC/assets/font.ttf", 66)
-    f_meta = _font("SHIVMUSIC/assets/font2.ttf", 34)
-    f_small = _font("SHIVMUSIC/assets/font2.ttf", 28)
-    f_foot = _font("SHIVMUSIC/assets/font.ttf", 44)
+    # Ambient Light Pools & Soft Warm Bokeh Orbs
+    bokeh_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(bokeh_layer)
+    bd.ellipse((-100, 50, 750, 850), fill=(*WINE_RICH, 100))
+    bd.ellipse((1100, -50, 2050, 750), fill=(*GOLD_WARM, 60))
+    bd.ellipse((650, 100, 1350, 650), fill=(*WINE_DARK, 110))
 
-    # --- Left: tilted YouTube cover card ---
-    cw, ch = 560, 430
+    rng_bokeh = random.Random(777)
+    for _ in range(45):
+        bx = rng_bokeh.randint(40, W - 40)
+        by = rng_bokeh.randint(30, H - 240)
+        bsz = rng_bokeh.randint(22, 115)
+        if rng_bokeh.random() > 0.45:
+            col = (*GOLD_LIGHT, rng_bokeh.randint(30, 85))
+        else:
+            col = (*ROSE_NEON, rng_bokeh.randint(35, 95))
+        bd.ellipse((bx - bsz, by - bsz, bx + bsz, by + bsz), fill=col)
+
+    canvas.alpha_composite(bokeh_layer.filter(ImageFilter.GaussianBlur(36)))
+
+    # 2. Flowing Silk Waves with Organic Curves
+    draw_flowing_ribbon(canvas, (380, 510), (740, 580), (1140, 540), (1530, 370), base_width=40, color_start=ROSE_NEON, color_end=GOLD_LIGHT)
+    draw_flowing_ribbon(canvas, (390, 240), (780, 290), (1180, 310), (1450, 260), base_width=20, color_start=GOLD_LIGHT, color_end=ROSE_NEON)
+    draw_flowing_ribbon(canvas, (280, 580), (660, 640), (1040, 610), (1380, 580), base_width=14, color_start=WINE_RICH, color_end=GOLD_WARM)
+
+    flares_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    fd = ImageDraw.Draw(flares_layer)
+    draw_lens_flare(fd, 740, 575, size=24, color=GOLD_LIGHT)
+    draw_lens_flare(fd, 1140, 535, size=28, color=CREAM)
+    draw_lens_flare(fd, 1400, 395, size=22, color=GOLD_LIGHT)
+    draw_lens_flare(fd, 820, 295, size=20, color=ROSE_NEON)
+    draw_lens_flare(fd, 1450, 260, size=18, color=CREAM)
+
+    canvas.alpha_composite(flares_layer.filter(ImageFilter.GaussianBlur(4)))
+    canvas.alpha_composite(flares_layer)
+
+    # Fonts
+    f_brand = _font("SHIVMUSIC/assets/font.ttf", 60)
+    f_vibe = _font("SHIVMUSIC/assets/font.ttf", 88)
+    f_title = _font("SHIVMUSIC/assets/font.ttf", 52)
+    f_meta = _font("SHIVMUSIC/assets/font2.ttf", 30)
+    f_small = _font("SHIVMUSIC/assets/font2.ttf", 26)
+    f_foot = _font("SHIVMUSIC/assets/font.ttf", 40)
+
+    # 3. Top Branding Text
+    # VIBE at top left with intense neon glow
+    glow_text(canvas, (110, 60), "VIBE", f_vibe, GOLD_LIGHT, (*ROSE_NEON, 255), radius=18, strength=4)
+    # RED WINE at top right
+    glow_text(canvas, (1810, 70), "RED WINE", f_brand, CREAM, (*ROSE_NEON, 240), radius=16, strength=4, anchor="ra")
+
+    # 4. Left: Tilted YouTube Cover Card with Neon Glow Frame
+    cw, ch = 470, 370
     cover = ImageOps.fit(bg.convert("RGB"), (cw, ch), centering=(0.5, 0.5)).convert("RGBA")
-    pad = 70
-    card = Image.new("RGBA", (cw + pad * 2, ch + pad * 2), (0, 0, 0, 0))
-    gl = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(gl)
-    gd.rounded_rectangle((pad - 14, pad - 14, pad + cw + 14, pad + ch + 14), 52, fill=(*ROSE, 200))
-    gl = gl.filter(ImageFilter.GaussianBlur(24))
-    card.alpha_composite(gl)
+    pad = 65
+    card_w, card_h = cw + pad * 2, ch + pad * 2
+    card = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+
+    c_glow = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    cgd = ImageDraw.Draw(c_glow)
+    cgd.rounded_rectangle((pad - 18, pad - 18, pad + cw + 18, pad + ch + 18), 52, fill=(*ROSE_NEON, 240))
+    card.alpha_composite(c_glow.filter(ImageFilter.GaussianBlur(24)))
+
     cd = ImageDraw.Draw(card)
-    cd.rounded_rectangle((pad - 8, pad - 8, pad + cw + 8, pad + ch + 8), 46, fill=(*GOLD, 255))
-    cd.rounded_rectangle((pad - 3, pad - 3, pad + cw + 3, pad + ch + 3), 42, fill=(*WINE, 255))
-    m = Image.new("L", (cw, ch), 0)
-    ImageDraw.Draw(m).rounded_rectangle((0, 0, cw - 1, ch - 1), 40, fill=255)
-    card.paste(cover, (pad, pad), m)
-    # glossy diagonal shine on the cover
-    shine = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shine).polygon(
-        [(pad, pad), (pad + 220, pad), (pad + 60, pad + ch), (pad - 160, pad + ch)], fill=(255, 255, 255, 28))
-    sm = Image.new("L", card.size, 0)
-    ImageDraw.Draw(sm).rounded_rectangle((pad, pad, pad + cw, pad + ch), 40, fill=255)
-    card.paste(Image.alpha_composite(card, shine), (0, 0), sm)
-    card = card.rotate(6, resample=Image.BICUBIC, expand=True)
-    canvas.alpha_composite(card, (40, 20))
+    cd.rounded_rectangle((pad - 10, pad - 10, pad + cw + 10, pad + ch + 10), 46, outline=(*GOLD_LIGHT, 255), width=6)
+    cd.rounded_rectangle((pad - 4, pad - 4, pad + cw + 4, pad + ch + 4), 42, fill=(*WINE_RICH, 255))
 
-    # --- Right: user avatar (slightly smaller) ---
-    av = 300
-    cx, cy = 1560, 330
-    glow_shape(canvas, lambda d, c: d.ellipse((cx - av // 2 - 22, cy - av // 2 - 22,
-                                              cx + av // 2 + 22, cy + av // 2 + 22), outline=c, width=14),
-               (*ROSE, 255), radius=22, strength=2)
-    d = ImageDraw.Draw(canvas)
-    d.ellipse((cx - av // 2 - 10, cy - av // 2 - 10, cx + av // 2 + 10, cy + av // 2 + 10), outline=GOLD, width=5)
+    c_mask = Image.new("L", (cw, ch), 0)
+    ImageDraw.Draw(c_mask).rounded_rectangle((0, 0, cw - 1, ch - 1), 38, fill=255)
+    card.paste(cover, (pad, pad), c_mask)
+
+    glass_sweep = Image.new("RGBA", (card_w, card_h), (0, 0, 0, 0))
+    ImageDraw.Draw(glass_sweep).polygon(
+        [(pad, pad), (pad + 170, pad), (pad + 50, pad + ch), (pad - 120, pad + ch)],
+        fill=(255, 255, 255, 40)
+    )
+    sm = Image.new("L", (card_w, card_h), 0)
+    ImageDraw.Draw(sm).rounded_rectangle((pad, pad, pad + cw, pad + ch), 38, fill=255)
+    card.paste(Image.alpha_composite(card, glass_sweep), (0, 0), sm)
+
+    cd_flare = ImageDraw.Draw(card)
+    draw_lens_flare(cd_flare, pad - 5, pad - 5, size=22, color=GOLD_LIGHT)
+    draw_lens_flare(cd_flare, pad + cw + 5, pad + ch + 5, size=18, color=ROSE_NEON)
+
+    # Tilted ~18 degrees
+    tilted_card = card.rotate(18, resample=Image.BICUBIC, expand=True)
+    canvas.alpha_composite(tilted_card, (40, 75))
+
+    # 5. Right: User Avatar Circle (260px) + Orbital Rings
+    av_size = 260
+    cx, cy = 1540, 335
+
+    orbit = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    od = ImageDraw.Draw(orbit)
+    od.ellipse((cx - av_size // 2 - 46, cy - av_size // 2 - 24,
+                cx + av_size // 2 + 46, cy + av_size // 2 + 24), outline=(*GOLD_LIGHT, 180), width=3)
+    od.ellipse((cx - av_size // 2 - 48, cy - 6, cx - av_size // 2 - 36, cy + 6), fill=(*GOLD_LIGHT, 255))
+    od.ellipse((cx + av_size // 2 + 36, cy - 6, cx + av_size // 2 + 48, cy + 6), fill=(*CREAM, 255))
+    canvas.alpha_composite(orbit.filter(ImageFilter.GaussianBlur(10)))
+    canvas.alpha_composite(orbit)
+
+    av_glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(av_glow).ellipse((cx - av_size // 2 - 20, cy - av_size // 2 - 20,
+                                     cx + av_size // 2 + 20, cy + av_size // 2 + 20), fill=(*ROSE_NEON, 230))
+    canvas.alpha_composite(av_glow.filter(ImageFilter.GaussianBlur(24)))
+
+    ad = ImageDraw.Draw(canvas)
+    ad.ellipse((cx - av_size // 2 - 8, cy - av_size // 2 - 8,
+                cx + av_size // 2 + 8, cy + av_size // 2 + 8), outline=(*GOLD_LIGHT, 255), width=6)
+
     if avatar_img is not None:
-        a = ImageOps.fit(avatar_img.convert("RGB"), (av, av)).convert("RGBA")
+        a_cropped = ImageOps.fit(avatar_img.convert("RGB"), (av_size, av_size)).convert("RGBA")
     else:
-        a = ImageOps.fit(bg.convert("RGB"), (av, av)).convert("RGBA").filter(ImageFilter.GaussianBlur(6))
-    am = Image.new("L", (av, av), 0)
-    ImageDraw.Draw(am).ellipse((0, 0, av - 1, av - 1), fill=255)
-    canvas.paste(a, (cx - av // 2, cy - av // 2), am)
-    # small music badge
-    bx, by = cx + 112, cy + 108
-    d.ellipse((bx - 36, by - 36, bx + 36, by + 36), fill=(30, 6, 14), outline=GOLD, width=4)
-    d.ellipse((bx - 16, by + 4, bx - 2, by + 18), fill=GOLD)
-    d.line((bx - 3, by + 10, bx - 3, by - 18), fill=GOLD, width=4)
-    d.line((bx - 3, by - 18, bx + 14, by - 10), fill=GOLD, width=4)
+        a_cropped = ImageOps.fit(bg.convert("RGB"), (av_size, av_size)).convert("RGBA").filter(ImageFilter.GaussianBlur(8))
 
-    # --- Glowing labels ---
-    glow_text(canvas, (1860, 50), "RED WINE", f_brand, CREAM, (*ROSE, 255), radius=14, strength=4, anchor="ra")
-    glow_text(canvas, (1110, 170), "VIBE", f_vibe, GOLD, (*GOLD, 230), radius=18, strength=4, anchor="la")
+    a_mask = Image.new("L", (av_size, av_size), 0)
+    ImageDraw.Draw(a_mask).ellipse((0, 0, av_size - 1, av_size - 1), fill=255)
+    canvas.paste(a_cropped, (cx - av_size // 2, cy - av_size // 2), a_mask)
 
-    # --- Bottom glass player card ---
-    x0, y0, x1, y1 = 70, 660, 1850, 960
-    glow_shape(canvas, lambda d, c: d.rounded_rectangle((x0, y0, x1, y1), 44, outline=c, width=6),
-               (*WINE, 255), radius=20, strength=2)
+    # Golden Music Note Badge
+    bx, by = cx + int(av_size * 0.38), cy + int(av_size * 0.36)
+    b_glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(b_glow).ellipse((bx - 42, by - 42, bx + 42, by + 42), fill=(*GOLD_WARM, 220))
+    canvas.alpha_composite(b_glow.filter(ImageFilter.GaussianBlur(16)))
+
+    bd_badge = ImageDraw.Draw(canvas)
+    bd_badge.ellipse((bx - 36, by - 36, bx + 36, by + 36), fill=(35, 6, 16), outline=GOLD_LIGHT, width=4)
+    bd_badge.ellipse((bx - 16, by + 4, bx - 2, by + 18), fill=CREAM)
+    bd_badge.line((bx - 3, by + 10, bx - 3, by - 16), fill=CREAM, width=4)
+    bd_badge.line((bx - 3, by - 16, bx + 15, by - 8), fill=CREAM, width=4)
+
+    # 6. Bottom Glass Player Card
+    x0, y0, x1, y1 = 90, 660, 1830, 960
+    radius = 50
+
+    # Header above card: "NOW PLAYING" + Divider Line
+    glow_text(canvas, (x0 + 15, y0 - 45), "NOW PLAYING", f_small, MUTED, (*ROSE_NEON, 180), radius=10, strength=2)
+    np_line = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    npd = ImageDraw.Draw(np_line)
+    npd.line((x0 + 195, y0 - 32, x1 - 20, y0 - 32), fill=(*ROSE_NEON, 110), width=2)
+    canvas.alpha_composite(np_line.filter(ImageFilter.GaussianBlur(6)))
+    canvas.alpha_composite(np_line)
+
+    # Card Neon Glow Contour
+    card_glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    cgd = ImageDraw.Draw(card_glow)
+    cgd.rounded_rectangle((x0 - 8, y0 - 8, x1 + 8, y1 + 8), radius + 6, outline=(*ROSE_NEON, 220), width=8)
+    canvas.alpha_composite(card_glow.filter(ImageFilter.GaussianBlur(20)))
+
+    # Dark Frosted Glass Surface
     glass = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(glass).rounded_rectangle((x0, y0, x1, y1), 44, fill=(18, 4, 10, 205))
+    ImageDraw.Draw(glass).rounded_rectangle((x0, y0, x1, y1), radius, fill=(18, 3, 11, 225))
     canvas.alpha_composite(glass)
-    d = ImageDraw.Draw(canvas)
-    d.rounded_rectangle((x0, y0, x1, y1), 44, outline=(*GOLD, 170), width=2)
-    d.line((x0 + 60, y0 + 2, x1 - 60, y0 + 2), fill=(255, 230, 210, 120), width=2)
 
-    glow_text(canvas, (x0 + 10, y0 - 46), "NOW PLAYING", f_small, MUTED, (*ROSE, 160), radius=8, strength=1)
+    # Card Rim & Top Luminous Specular Light Beam
+    cd_player = ImageDraw.Draw(canvas)
+    cd_player.rounded_rectangle((x0, y0, x1, y1), radius, outline=(*GOLD_LIGHT, 175), width=3)
 
-    # mic icon box
-    ix, iy = x0 + 50, y0 + 50
-    d.rounded_rectangle((ix, iy, ix + 120, iy + 120), 26, fill=(40, 8, 20), outline=(*ROSE, 200), width=3)
-    d.rounded_rectangle((ix + 46, iy + 24, ix + 74, iy + 70), 14, outline=CREAM, width=4)
-    d.arc((ix + 34, iy + 44, ix + 86, iy + 88), 0, 180, fill=CREAM, width=4)
-    d.line((ix + 60, iy + 88, ix + 60, iy + 100), fill=CREAM, width=4)
+    beam = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(beam).line((x0 + 70, y0 + 1, x1 - 70, y0 + 1), fill=(255, 255, 255, 220), width=3)
+    canvas.alpha_composite(beam.filter(ImageFilter.GaussianBlur(3)))
+    canvas.alpha_composite(beam)
 
-    tx = ix + 160
-    d.text((tx, y0 + 34), f"{channel[:28]}  |  {views} views", font=f_small, fill=MUTED)
-    t = title
-    while d.textlength(t, font=f_title) > 980 and len(t) > 4:
-        t = t[:-4].rstrip() + "..."
-    d.text((tx, y0 + 76), t, font=f_title, fill=CREAM)
-    d.rounded_rectangle((tx, y0 + 170, tx + 230, y0 + 212), 21, fill=WINE)
-    d.text((tx + 115, y0 + 191), "YouTube Music", font=f_small, fill=CREAM, anchor="mm")
+    # Microphone Icon Box
+    ix, iy = x0 + 45, y0 + 45
+    cd_player = ImageDraw.Draw(canvas)
+    cd_player.rounded_rectangle((ix, iy, ix + 120, iy + 120), 28, fill=(45, 8, 22), outline=(*ROSE_NEON, 220), width=3)
+    cd_player.rounded_rectangle((ix + 46, iy + 25, ix + 74, iy + 71), 14, outline=CREAM, width=4)
+    cd_player.arc((ix + 34, iy + 45, ix + 86, iy + 89), 0, 180, fill=CREAM, width=4)
+    cd_player.line((ix + 60, iy + 89, ix + 60, iy + 101), fill=CREAM, width=4)
 
-    # waveform
-    rng = random.Random(str(seed))
-    wx, wy = 1330, y0 + 115
-    bars = 38
-    def draw_wave(dd, c):
-        for i in range(bars):
-            env = math.sin(math.pi * i / (bars - 1)) ** 0.8
-            h = max(6, int(rng_vals[i] * env))
-            x = wx + i * 12
-            dd.rounded_rectangle((x, wy - h, x + 5, wy + h), 3, fill=c)
-    rng_vals = [rng.randint(18, 78) for _ in range(bars)]
-    glow_shape(canvas, draw_wave, (*GOLD, 255), radius=8, strength=1)
+    # Track Info
+    tx = ix + 155
+    cd_player.text((tx, y0 + 32), f"{channel[:28]}  |  {views} views", font=f_meta, fill=MUTED)
 
-    # progress bar
-    d = ImageDraw.Draw(canvas)
-    py = y1 - 52
+    # 2-line title wrapping for maximum elegance
+    max_title_w = 780
+    words = title.split()
+    lines = []
+    curr = ""
+    for w in words:
+        test = f"{curr} {w}".strip()
+        if cd_player.textlength(test, font=f_title) <= max_title_w:
+            curr = test
+        else:
+            if curr:
+                lines.append(curr)
+            curr = w
+        if len(lines) == 2:
+            break
+    if curr and len(lines) < 2:
+        lines.append(curr)
+
+    if len(lines) == 1:
+        cd_player.text((tx, y0 + 74), lines[0], font=f_title, fill=CREAM)
+        badge_y = y0 + 155
+    else:
+        l2 = lines[1]
+        while cd_player.textlength(l2 + "...", font=f_title) > max_title_w and len(l2) > 3:
+            l2 = l2[:-3].rstrip()
+        if l2 != lines[1]:
+            l2 += "..."
+        cd_player.text((tx, y0 + 68), lines[0], font=f_title, fill=CREAM)
+        cd_player.text((tx, y0 + 122), l2, font=f_title, fill=CREAM)
+        badge_y = y0 + 175
+
+    # YouTube Music badge pill
+    cd_player.rounded_rectangle((tx, badge_y, tx + 205, badge_y + 40), 20, fill=(185, 18, 50))
+    cd_player.text((tx + 102, badge_y + 20), "YouTube Music", font=f_small, fill=CREAM, anchor="mm")
+
+    # Audio Waveform bars (Symmetrical golden glow on right)
+    rng_wave = random.Random(str(seed))
+    wx = 1320
+    wy = y0 + 115
+    bars = 36
+    h_vals = [rng_wave.randint(20, 82) for _ in range(bars)]
+
+    wave_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    wd = ImageDraw.Draw(wave_layer)
+    for i in range(bars):
+        env = math.sin(math.pi * i / (bars - 1)) ** 0.72
+        h = max(8, int(h_vals[i] * env))
+        x = wx + i * 13
+        wd.rounded_rectangle((x, wy - h, x + 6, wy + h), 3, fill=GOLD_LIGHT)
+
+    wave_glow = wave_layer.filter(ImageFilter.GaussianBlur(10))
+    canvas.alpha_composite(wave_glow)
+    canvas.alpha_composite(wave_layer)
+
+    # Bottom Progress Bar & Scrubber Knob
+    py = y1 - 48
     px0, px1 = x0 + 60, x1 - 60
-    d.line((px0, py, px1, py), fill=(110, 70, 80), width=4)
-    prog = px0 + int((px1 - px0) * 0.08)
-    glow_shape(canvas, lambda dd, c: dd.line((px0, py, prog, py), fill=c, width=6), (*ROSE, 255), radius=6, strength=1)
-    d = ImageDraw.Draw(canvas)
-    d.ellipse((prog - 11, py - 11, prog + 11, py + 11), fill=CREAM, outline=ROSE, width=3)
-    d.text((px0, py + 14), "00:00", font=f_small, fill=MUTED)
-    d.text((px1, py + 14), duration, font=f_small, fill=MUTED, anchor="ra")
+    cd_prog = ImageDraw.Draw(canvas)
+    cd_prog.line((px0, py, px1, py), fill=(105, 55, 70), width=5)
 
-    # --- Footer branding ---
-    glow_text(canvas, (80, 1000), "BETA BOT HUB", f_foot, CREAM, (*ROSE, 255), radius=10)
-    glow_text(canvas, (1840, 1000), "THE SHIV", f_foot, GOLD, (*GOLD, 220), radius=10, anchor="ra")
+    prog = px0 + int((px1 - px0) * 0.12)
+    prog_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    pd = ImageDraw.Draw(prog_layer)
+    pd.line((px0, py, prog, py), fill=ROSE_NEON, width=6)
+    canvas.alpha_composite(prog_layer.filter(ImageFilter.GaussianBlur(8)))
+    canvas.alpha_composite(prog_layer)
+
+    cd_prog.ellipse((prog - 12, py - 12, prog + 12, py + 12), fill=CREAM, outline=ROSE_NEON, width=4)
+    cd_prog.text((px0, py + 12), "00:00", font=f_small, fill=MUTED)
+    cd_prog.text((px1, py + 12), duration, font=f_small, fill=MUTED, anchor="ra")
+
+    # 7. Footer Branding
+    glow_text(canvas, (90, 1000), "BETA BOT HUB", f_foot, CREAM, (*ROSE_NEON, 240), radius=12, strength=3)
+    glow_text(canvas, (1830, 1000), "THE SHIV", f_foot, GOLD_LIGHT, (*GOLD_WARM, 220), radius=12, strength=3, anchor="ra")
+
     return canvas.convert("RGB")
 
 
 async def get_thumb(videoid, user_id, user_name):
     os.makedirs("cache", exist_ok=True)
     safe_videoid = re.sub(r"[^a-zA-Z0-9_-]", "_", str(videoid))[:80] or "track"
-    final_path = f"cache/{safe_videoid}_{user_id}_v5.png"
+    final_path = f"cache/{safe_videoid}_{user_id}_v6.png"
     if os.path.exists(final_path):
         return final_path
     temp_path = f"cache/temp_{safe_videoid}_{user_id}.jpg"
